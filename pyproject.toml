@@ -1,0 +1,4 @@
+[tool.ruff]
+# Set line length to 120 characters
+line-length = 120
+select = ["E", "F", "B", "W", "N", "D", "ASYNC", "COM", "C4", "PYI", "Q", "RET","SIM","TCH", "ARG","PL", "C90"]
