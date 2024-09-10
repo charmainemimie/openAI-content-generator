@@ -5,8 +5,7 @@ import spacy
 # from text import scrape_charity_website
 
 # Set your OpenAI API key
-# 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
-openai.api_key ="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"
+# 
 
 # spacy.cli.download("en_core_web_sm")
 nlp = spacy.load("en_core_web_sm")
