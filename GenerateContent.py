@@ -1,11 +1,20 @@
 """Generates content for a given charity website(url) using the openAI api."""
 import os
+import random
+import time
 from pathlib import Path
 
 import openai
 import spacy
-# from spacy.lang.en import English
-# from text import scrape_charity_website
+
+CHUNK_WORD_LIMIT = 2000
+MAX_RETRIES = 5
+DEFAULT_MODEL = "gpt-4o-mini"
+SYSTEM_PROMPT = (
+    "You summarize charity and grant-maker web pages. Write about 10 sentences with no "
+    "repetition. Include the program description and the amounts of grants being offered "
+    "when that information is present."
+)
 
 
 def load_env_file(path):
@@ -27,8 +36,17 @@ if not openai.api_key:
         "OPENAI_API_KEY is not set. Copy .env.example to .env and add your key."
     )
 
-# spacy.cli.download("en_core_web_sm")
 nlp = spacy.load("en_core_web_sm")
+RETRYABLE_ERRORS = (
+    openai.error.RateLimitError,
+    openai.error.Timeout,
+    openai.error.APIConnectionError,
+    openai.error.APIError,
+    openai.error.ServiceUnavailableError,
+    openai.error.TryAgain,
+)
+
+
 def text_to_chunks(text):
     """Chunks the text from txt file."""
     chunkslist = [[]]
@@ -38,49 +56,64 @@ def text_to_chunks(text):
 
     for sentence in sentences.sents:
         chunk_total_words += len(sentence.text.split(" "))
-        num_of_words = 2000
-        if chunk_total_words > num_of_words:
+        if chunk_total_words > CHUNK_WORD_LIMIT:
             chunkslist.append([])
             chunk_total_words = len(sentence.text.split(" "))
 
         chunkslist[len(chunkslist) - 1].append(sentence.text)
 
     return chunkslist
+
+
 def summarize_text(text):
-    """Generate content using OpenAI API."""
-    prompt = (
-        f"Summarize the following text in about 10 sentences with no repetition and give meaningful content including "
-        f"the description and"
-        f"amounts of the grants being offered:\n{text}")
-    try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",
-            prompt=prompt,
-            temperature=0.3,
-            max_tokens=1000,  # approximately 600-800 words generated
-            top_p=1,
-            frequency_penalty=1,
-            presence_penalty=1,
-        )
+    """Generate content using the OpenAI Chat Completions API, with retries."""
+    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Summarize the following text in about 10 sentences with no "
+                            "repetition and include the description and amounts of the "
+                            f"grants being offered:\n{text}"
+                        ),
+                    },
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+                top_p=1,
+                frequency_penalty=1,
+                presence_penalty=1,
+            )
+            content = response["choices"][0]["message"]["content"]
+            if not content or not content.strip():
+                raise openai.error.APIError("Empty completion from OpenAI")
+            return content.strip()
+        except (openai.error.AuthenticationError, openai.error.InvalidRequestError):
+            raise
+        except RETRYABLE_ERRORS as exc:
+            last_error = exc
+            wait_seconds = _retry_wait(exc, attempt)
+            print(
+                f"OpenAI API error ({exc}). Retrying in {wait_seconds:.1f}s "
+                f"({attempt}/{MAX_RETRIES})..."
+            )
+            time.sleep(wait_seconds)
 
-        return response["choices"][0]["text"]
+    raise RuntimeError(f"OpenAI API failed after {MAX_RETRIES} attempts: {last_error}")
 
-    except openai.error.OpenAIError as e:
-        print("OpenAI API Error:", e)
-        return None
 
-# with open('charity_info.txt2', 'r', encoding='utf-8') as file:
-#     one_large_text = file.read()
-#
-# chunks = text_to_chunks(one_large_text)
-#
-# chunk_summaries = []
-#
-# for chunk in chunks:
-#     chunk_summary = summarize_text(" ".join(chunk))
-#     chunk_summaries.append(chunk_summary)
-#
-# summary = " ".join(chunk_summaries)
-# with open('generated_content.txt', 'w', encoding='utf-8') as file:
-#     file.write(summary)
-# print(summary)
+def _retry_wait(exc, attempt):
+    headers = getattr(exc, "headers", None) or {}
+    retry_after = headers.get("retry-after") or headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(float(retry_after), 1.0)
+        except ValueError:
+            pass
+    return min((2 ** (attempt - 1)) + random.random(), 30)

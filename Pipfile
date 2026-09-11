@@ -4,9 +4,15 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+openai = ">=0.27.8,<1.0.0"
+spacy = "*"
+requests = "*"
+beautifulsoup4 = "*"
+playwright = "*"
 pre-commit = "*"
 
 [dev-packages]
+ruff = "*"
 
 [requires]
 python_version = "3.9"

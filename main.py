@@ -1,56 +1,84 @@
 """Main file that calls text.py and GenerateContent.py."""
 
-import text
-import GenerateContent
-import os
 import json
+import os
+from urllib.parse import urlsplit, urlunsplit
 
-# Press the green button in the gutter to run the script.
+import GenerateContent
+import text
+
+JSON_FILENAME = "tempContentDB.json"
+
+
+def normalize_url(url):
+    """Canonicalize a URL so the same page is not stored twice."""
+    parts = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        raise ValueError(f"Invalid URL: {url}")
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+
+def load_database(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as json_file:
+        data = json.load(json_file)
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must contain a JSON array")
+    return data
+
+
+def save_database(path, data):
+    with open(path, "w", encoding="utf-8") as json_file:
+        json.dump(data, json_file, ensure_ascii=False, indent=4)
+        json_file.write("\n")
+
+
+def find_entry_index(data, url):
+    for index, entry in enumerate(data):
+        existing = entry.get("url", "")
+        try:
+            if normalize_url(existing) == url:
+                return index
+        except ValueError:
+            continue
+    return None
+
+
 if __name__ == "__main__":
-    # get text from site
-    url = str(input("Please enter the URL of the charity website: "))
+    url = str(input("Please enter the URL of the charity website: ")).strip()
+    normalized_url = normalize_url(url)
+    existing_data = load_database(JSON_FILENAME)
+    existing_index = find_entry_index(existing_data, normalized_url)
 
-    # url = "https://www.bobbarkerfoundation.org/eligibility-grant-process"
-    text_filename = text.scrape_charity_website(url)
+    if existing_index is not None:
+        answer = input(
+            "This URL is already in tempContentDB.json. Replace the existing summary? [y/N]: "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            print("Skipped. Existing summary was left unchanged.")
+            raise SystemExit(0)
 
-    # generating content
-
-    with open("./textfiles/"+text_filename+".txt", "r", encoding="utf-8") as file:
-        one_large_text = file.read()
-
-    chunks = GenerateContent.text_to_chunks(one_large_text)
+    text_filename = str(
+        input("Enter the name of the text file to save the website info : ")
+    ).strip()
+    page_text = text.scrape_charity_website(url, text_filename)
 
     chunk_summaries = []
+    for chunk in GenerateContent.text_to_chunks(page_text):
+        chunk_summaries.append(GenerateContent.summarize_text(" ".join(chunk)))
 
-    for chunk in chunks:
-        chunk_summary = GenerateContent.summarize_text(" ".join(chunk))
-        chunk_summaries.append(chunk_summary)
+    summary = " ".join(part for part in chunk_summaries if part).replace("\n", " ").strip()
+    if not summary:
+        raise RuntimeError("Summarization produced no content.")
 
-    summary = " ".join(chunk_summaries)
-    summary = summary.replace("\n", "")
-
-    # # save summary in text file
-    # with open('GG253_generated_content.txt', 'w', encoding='utf-8') as file:
-    #     file.write(summary)
-
-    # save generated content to json file
-    json_filename = "tempContentDB.json"
-    if os.path.exists(json_filename):
-        with open(json_filename, "r", encoding="utf-8") as json_file:
-            existing_data = json.load(json_file)
+    entry = {"url": normalized_url, "content": summary}
+    if existing_index is not None:
+        existing_data[existing_index] = entry
     else:
-        existing_data = []
+        existing_data.append(entry)
 
-    # Create a dictionary entry for the URL and its corresponding summary
-    entry = {"url": url, "content": summary}
-
-    # Add the new entry to the existing data list
-    existing_data.append(entry)
-
-    # Write the updated data to the JSON file
-    with open(json_filename, "w", encoding="utf-8") as json_file:
-        json_file.write(json.dumps(existing_data, ensure_ascii=False, indent=4))
-
-    print(f"Summary for {url} saved to {json_filename} successfully.")
-
+    save_database(JSON_FILENAME, existing_data)
+    print(f"Summary for {normalized_url} saved to {JSON_FILENAME} successfully.")
     print(summary)
